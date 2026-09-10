@@ -1,0 +1,7 @@
+node_modules/
+Result/
+Dockerfile
+Dockerfile.nofonts
+.dockerignore
+README.md
+*.lic

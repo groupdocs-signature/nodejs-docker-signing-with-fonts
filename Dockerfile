@@ -1,0 +1,70 @@
+# Signing documents with GroupDocs.Signature for Node.js via Java inside a Linux container.
+#
+# This binding loads a JVM in-process, so the image needs three things, not one:
+#   1. a JDK - and it must be Java 8-17. GroupDocs.Signature for Java is Java-8 bytecode and its
+#      imaging breaks on JDK 25 with "Cannot open an image. The image size can not be 0!".
+#   2. a toolchain to build the node-java native addon (node-gyp: make, g++, python3)
+#   3. fonts - without them every text signature fails, because GroupDocs does not substitute a
+#      missing family and falls back to its own default, which is equally absent
+
+FROM node:18-bookworm
+
+# JDK 17 plus the node-gyp toolchain for the native java bridge.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        openjdk-17-jdk-headless \
+        build-essential \
+        python3 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+# node-java dlopens libjvm.so at run time; it is not on the default loader path.
+ENV LD_LIBRARY_PATH="${JAVA_HOME}/lib/server:${LD_LIBRARY_PATH}"
+
+# Fonts. Separate layer on purpose: build Dockerfile.nofonts to see what happens without it.
+#   fontconfig            the resolver itself, plus fc-cache / fc-list for debugging
+#   fonts-dejavu-core     Latin/Greek/Cyrillic workhorse; the sample resolves "DejaVu Sans"
+#   fonts-liberation      metric-compatible stand-ins for Arial / Times New Roman / Courier New
+#   fonts-noto-cjk        Chinese, Japanese and Korean; the sample resolves "Noto Sans CJK JP"
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        fontconfig \
+        fonts-dejavu-core \
+        fonts-liberation \
+        fonts-noto-cjk \
+    && fc-cache -f \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY package.json ./
+RUN npm install --no-audit --no-fund
+
+# Strip the jar signature. The bundled GroupDocs jar is a signed fat jar and the JVM refuses to load
+# classes from it:
+#   java.lang.NoClassDefFoundError: com/groupdocs/signature/Signature
+# Deleting META-INF/*.SF|RSA|DSA is not enough on its own - MANIFEST.MF still carries a per-entry
+# SHA digest for every class (~19 MB), which is what the loader chokes on - so the manifest is also
+# truncated to its main section.
+RUN apt-get update && apt-get install -y --no-install-recommends zip unzip \
+    && for j in $(find /app/node_modules/@groupdocs -name '*.jar'); do \
+         zip -d "$j" 'META-INF/*.SF' 'META-INF/*.RSA' 'META-INF/*.DSA' >/dev/null 2>&1 || true; \
+         work=$(mktemp -d); \
+         ( cd "$work" \
+           && unzip -o -q "$j" META-INF/MANIFEST.MF \
+           && sed -n '1,/^[[:space:]]*$/p' META-INF/MANIFEST.MF > META-INF/MANIFEST.trimmed \
+           && mv META-INF/MANIFEST.trimmed META-INF/MANIFEST.MF \
+           && zip -q "$j" META-INF/MANIFEST.MF ); \
+         rm -rf "$work"; \
+       done \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+COPY index.js ./
+COPY documents ./documents
+
+# documents/ and Result/ are resolved relative to the working directory.
+# Mount a volume over /app/Result to keep the signed file, and mount a licence rather than
+# baking one in:
+#   docker run --rm -v "$PWD/Result:/app/Result" \
+#              -v "/path/to/licences:/lic:ro" -e LIC_PATH=/lic/GroupDocs.Total.lic \
+#              groupdocs-signature-fonts-nodejs
+ENTRYPOINT ["node", "index.js"]

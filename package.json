@@ -1,0 +1,16 @@
+{
+  "name": "docker-fonts-demo",
+  "version": "1.0.0",
+  "description": "Signing inside a Linux container with GroupDocs.Signature for Node.js via Java - font provisioning and a working Dockerfile",
+  "main": "index.js",
+  "private": true,
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@groupdocs/groupdocs.signature": "24.12.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
